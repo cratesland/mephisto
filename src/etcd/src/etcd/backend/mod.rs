@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::PathBuf;
+
 use bytes::Bytes;
 use rocksdb::{Direction, IteratorMode, DB};
 
@@ -23,11 +25,16 @@ pub struct RocksDBBackend {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct BackendRange {
-    kvs: Vec<(Bytes, Bytes)>,
+    pub kvs: Vec<(Bytes, Bytes)>,
 }
 
 // TODO (@tisonkun) separate readTx and batchTx
 impl RocksDBBackend {
+    pub fn new(path: PathBuf) -> Self {
+        let db = DB::open_default(path).expect("cannot open rocksdb");
+        Self { db }
+    }
+
     pub fn unsafe_put(&mut self, key: Bytes, value: Bytes) -> RocksDBResult<()> {
         self.db.put(key, value)
     }
