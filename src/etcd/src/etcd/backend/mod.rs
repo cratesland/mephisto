@@ -45,6 +45,7 @@ impl RocksDBBackend {
         end: Option<Bytes>,
         limit: usize,
     ) -> RocksDBResult<BackendRange> {
+        #[allow(clippy::type_complexity)]
         let (bound, pred): (usize, Box<dyn Fn(&Bytes) -> bool>) = match end {
             None => (1, Box::new(|k: &Bytes| k == &key)),
             Some(end) => {
@@ -53,12 +54,12 @@ impl RocksDBBackend {
             }
         };
 
-        let mut it = self
+        let it = self
             .db
             .iterator(IteratorMode::From(&key, Direction::Forward));
 
         let mut kvs = vec![];
-        while let Some(item) = it.next() {
+        for item in it {
             let (k, v) = item?;
             let (k, v) = (Bytes::from(k), Bytes::from(v));
             if !pred(&k) {
