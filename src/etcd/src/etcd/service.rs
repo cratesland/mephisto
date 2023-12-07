@@ -14,21 +14,46 @@
 
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use chrono::Utc;
+use crossbeam::channel::Sender;
+use prost::Message;
+use tokio::sync::{oneshot, Mutex};
 use tonic::{Request, Response, Status};
 
-use crate::etcd::{
-    make_gte_range,
-    pb::etcdserverpb::{
-        kv_server::Kv, CompactionRequest, CompactionResponse, DeleteRangeRequest,
-        DeleteRangeResponse, PutRequest, PutResponse, RangeRequest, RangeResponse, TxnRequest,
-        TxnResponse,
+use crate::{
+    etcd::{
+        id::IdGen,
+        make_gte_range,
+        pb::etcdserverpb::{
+            kv_server::Kv, CompactionRequest, CompactionResponse, DeleteRangeRequest,
+            DeleteRangeResponse, PutRequest, PutResponse, RangeRequest, RangeResponse, TxnRequest,
+            TxnResponse,
+        },
+        state::{EtcdState, StateRange},
     },
-    state::{EtcdState, StateRange},
+    raft::ApiProposeMessage,
 };
 
 pub struct KvService {
-    pub state: Arc<Mutex<EtcdState>>,
+    state: Arc<Mutex<EtcdState>>,
+
+    id_gen: IdGen,
+    tx_api: Sender<ApiProposeMessage>,
+}
+
+impl KvService {
+    pub fn new(
+        member_id: u64,
+        state: Arc<Mutex<EtcdState>>,
+        tx_api: Sender<ApiProposeMessage>,
+    ) -> Self {
+        let id_gen = IdGen::new(member_id, Utc::now());
+        KvService {
+            state,
+            id_gen,
+            tx_api,
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -50,7 +75,18 @@ impl Kv for KvService {
     }
 
     async fn put(&self, request: Request<PutRequest>) -> Result<Response<PutResponse>, Status> {
-        let PutRequest { key, value, .. } = request.into_inner();
+        let id = self.id_gen.next();
+        let data = request.into_inner().encode_length_delimited_to_vec();
+
+        let (tx, rx) = oneshot::channel();
+        self.tx_api
+            .send(ApiProposeMessage::new(id, data, tx))
+            .unwrap();
+
+        let PutRequest { key, value, .. } = {
+            let data = rx.await.unwrap();
+            PutRequest::decode_length_delimited(data.as_slice()).unwrap()
+        };
         let mut state = self.state.lock().await;
         state.put(key.into(), value.into());
         Ok(Response::new(PutResponse {
