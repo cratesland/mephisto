@@ -19,6 +19,7 @@ use crossbeam::channel::Sender;
 use prost::Message;
 use tokio::sync::{oneshot, Mutex};
 use tonic::{Request, Response, Status};
+use tracing::debug;
 
 use crate::{
     etcd::{
@@ -76,17 +77,22 @@ impl Kv for KvService {
 
     async fn put(&self, request: Request<PutRequest>) -> Result<Response<PutResponse>, Status> {
         let id = self.id_gen.next();
-        let data = request.into_inner().encode_length_delimited_to_vec();
+        let req = request.into_inner();
+
+        debug!("internal propose request {id} {req:?}");
+        let data = req.encode_length_delimited_to_vec();
 
         let (tx, rx) = oneshot::channel();
         self.tx_api
             .send(ApiProposeMessage::new(id, data, tx))
-            .unwrap();
+            .map_err(|err| Status::internal(err.to_string()))?;
 
         let PutRequest { key, value, .. } = {
-            let data = rx.await.unwrap();
-            PutRequest::decode_length_delimited(data.as_slice()).unwrap()
+            let data = rx.await.map_err(|err| Status::internal(err.to_string()))?;
+            PutRequest::decode_length_delimited(data.as_slice())
+                .map_err(|err| Status::internal(err.to_string()))?
         };
+
         let mut state = self.state.lock().await;
         state.put(key.into(), value.into());
         Ok(Response::new(PutResponse {
