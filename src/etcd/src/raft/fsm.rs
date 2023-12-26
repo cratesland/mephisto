@@ -14,7 +14,10 @@
 
 use std::collections::BTreeMap;
 
-use mephisto_raft::{eraftpb::Entry, ReadState};
+use mephisto_raft::{
+    eraftpb::{Entry, EntryType},
+    ReadState,
+};
 use prost::encoding::decode_varint;
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -47,6 +50,14 @@ impl FSM {
         );
         self.applied_index = ent.index;
 
+        if ent.data.is_empty() {
+            // empty entry on leader elected
+            return;
+        }
+
+        // currently only normal entry
+        assert_eq!(ent.entry_type(), EntryType::EntryNormal);
+
         // resp apply
         let id = decode_varint(&mut ent.context.as_slice()).expect("malformed context");
         let rx = self.applies.remove(&id).expect("resp channel absent");
@@ -61,7 +72,9 @@ impl FSM {
             }
             let waiters = read_waiter.remove();
             for waiter in waiters {
-                waiter.send(()).expect("resp channel has been closed");
+                waiter
+                    .send(())
+                    .unwrap_or_else(|_| debug!("resp channel has been closed"));
             }
         }
     }
@@ -70,7 +83,8 @@ impl FSM {
         let id = decode_varint(&mut state.request_ctx.as_slice()).expect("malformed context");
         let rx = self.read_indices.remove(&id).expect("resp channel absent");
         if state.index <= self.applied_index {
-            rx.send(()).expect("resp channel has been closed");
+            rx.send(())
+                .unwrap_or_else(|_| debug!("resp channel has been closed"));
         } else {
             self.read_waiters.entry(state.index).or_default().push(rx);
         }

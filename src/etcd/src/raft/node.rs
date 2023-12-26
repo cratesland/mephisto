@@ -19,11 +19,7 @@ use std::{
 
 use crossbeam::channel::{Receiver, Select, Sender, TryRecvError};
 use mephisto_raft::{
-    eraftpb,
-    eraftpb::{Entry, EntryType, Message},
-    fatal,
-    storage::MemStorage,
-    Config, Peer, RawNode, StateRole,
+    eraftpb, eraftpb::Message, fatal, storage::MemStorage, Config, Peer, RawNode, StateRole,
 };
 use prost::encoding::{encode_varint, encoded_len_varint};
 use tokio::sync::mpsc::UnboundedSender;
@@ -179,7 +175,7 @@ impl RaftNode {
         }
 
         for ent in ready.take_committed_entries() {
-            self.handle_committed_entry(ent);
+            self.fsm.apply(ent);
         }
 
         if !ready.entries().is_empty() {
@@ -205,22 +201,11 @@ impl RaftNode {
         }
 
         for ent in light_ready.take_committed_entries() {
-            self.handle_committed_entry(ent);
+            self.fsm.apply(ent);
         }
 
         self.node.advance_apply();
         Ok(())
-    }
-
-    fn handle_committed_entry(&mut self, ent: Entry) {
-        if ent.data.is_empty() {
-            // empty entry on leader elected
-            return;
-        }
-
-        // currently only normal entry
-        assert_eq!(ent.entry_type(), EntryType::EntryNormal);
-        self.fsm.apply(ent);
     }
 
     fn handle_message(&self, msg: Message, _is_persisted_msg: bool) {
